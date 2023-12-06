@@ -43,7 +43,7 @@ def download_file(base_path, file_name, date_range=None, folder=None):
     save_path = get_destination_dir(os.path.join(base_path, file_name), folder)
 
     if os.path.exists(save_path):
-        print("\nfile already exists! {}".format(save_path))
+        print("\nFile already exists! {}".format(save_path))
         return
 
     # make the directory
@@ -67,9 +67,9 @@ def download_file(base_path, file_name, date_range=None, folder=None):
                     break
                 dl_progress += len(buf)
                 out_file.write(buf)
-                done = int(50 * dl_progress / length)
-                sys.stdout.write("\r[%s%s]" % ('#' * done, '.' * (50 - done)))
-                sys.stdout.flush()
+                # done = int(50 * dl_progress / length)
+                # sys.stdout.write("\r[%s%s]" % ('#' * done, '.' * (50 - done)))
+                # sys.stdout.flush()
 
     except urllib.error.HTTPError:
         print("\nFile not found: {}".format(download_url))
@@ -163,7 +163,9 @@ def get_parser(parser_type):
     parser.add_argument(
         '-t', dest='type', required=True, choices=TRADING_TYPE,
         help='Valid trading types: {}'.format(TRADING_TYPE))
-
+    parser.add_argument(
+        '-n', dest='workers', default=24, type=int,
+        help='Number of concurrent downloads')
     if parser_type == 'klines':
         parser.add_argument(
             '-i', dest='intervals', default=INTERVALS, nargs='+', choices=INTERVALS,

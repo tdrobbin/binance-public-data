@@ -1,4 +1,4 @@
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed, ThreadPoolExecutor
 
 from tqdm import tqdm
 
@@ -8,7 +8,7 @@ class WorkerPool:
     def __init__(self, n=24, desc='Downloading'):
         self.n = n
         self.desc = desc
-        self.pool = ProcessPoolExecutor(max_workers=self.n)
+        self.pool = ThreadPoolExecutor(max_workers=self.n)
         self.futures = {}
         self.closed = False
 
@@ -26,3 +26,4 @@ class WorkerPool:
             print(f'Completed {inputs}')
         self.pool.shutdown()
         self.closed = True
+        print(f'Completed {self.desc}')

@@ -15,9 +15,10 @@ import pandas as pd
 from enums import *
 from utility import download_file, get_all_symbols, get_parser, convert_to_date_object, \
     get_path
+from worker_pool import WorkerPool
 
 
-def download_monthly_aggTrades(trading_type, symbols, num_symbols, years, months, start_date, end_date, folder,
+def download_monthly_aggTrades(pool, trading_type, symbols, num_symbols, years, months, start_date, end_date, folder,
                                checksum):
     current = 0
     date_range = None
@@ -45,18 +46,18 @@ def download_monthly_aggTrades(trading_type, symbols, num_symbols, years, months
                 if current_date >= start_date and current_date <= end_date:
                     path = get_path(trading_type, "aggTrades", "monthly", symbol)
                     file_name = "{}-aggTrades-{}-{}.zip".format(symbol.upper(), year, '{:02d}'.format(month))
-                    download_file(path, file_name, date_range, folder)
+                    pool.submit(download_file, path, file_name, date_range, folder)
 
                     if checksum == 1:
                         checksum_path = get_path(trading_type, "aggTrades", "monthly", symbol)
                         checksum_file_name = "{}-aggTrades-{}-{}.zip.CHECKSUM".format(symbol.upper(), year,
                                                                                       '{:02d}'.format(month))
-                        download_file(checksum_path, checksum_file_name, date_range, folder)
+                        pool.submit(download_file, checksum_path, checksum_file_name, date_range, folder)
 
         current += 1
 
 
-def download_daily_aggTrades(trading_type, symbols, num_symbols, dates, start_date, end_date, folder, checksum):
+def download_daily_aggTrades(pool, trading_type, symbols, num_symbols, dates, start_date, end_date, folder, checksum):
     current = 0
     date_range = None
 
@@ -82,12 +83,12 @@ def download_daily_aggTrades(trading_type, symbols, num_symbols, dates, start_da
             if current_date >= start_date and current_date <= end_date:
                 path = get_path(trading_type, "aggTrades", "daily", symbol)
                 file_name = "{}-aggTrades-{}.zip".format(symbol.upper(), date)
-                download_file(path, file_name, date_range, folder)
+                pool.submit(download_file, path, file_name, date_range, folder)
 
                 if checksum == 1:
                     checksum_path = get_path(trading_type, "aggTrades", "daily", symbol)
                     checksum_file_name = "{}-aggTrades-{}.zip.CHECKSUM".format(symbol.upper(), date)
-                    download_file(checksum_path, checksum_file_name, date_range, folder)
+                    pool.submit(download_file, checksum_path, checksum_file_name, date_range, folder)
 
         current += 1
 
@@ -96,6 +97,7 @@ if __name__ == "__main__":
     parser = get_parser('aggTrades')
     args = parser.parse_args(sys.argv[1:])
 
+    pool = WorkerPool(args.workers, 'Download aggTrades')
     if not args.symbols:
         print("fetching all symbols from exchange")
         symbols = get_all_symbols(args.type)
@@ -113,8 +115,9 @@ if __name__ == "__main__":
         dates = pd.date_range(end=datetime.today(), periods=period.days + 1).to_pydatetime().tolist()
         dates = [date.strftime("%Y-%m-%d") for date in dates]
         if args.skip_monthly == 0:
-            download_monthly_aggTrades(args.type, symbols, num_symbols, args.years, args.months, args.startDate,
+            download_monthly_aggTrades(pool, args.type, symbols, num_symbols, args.years, args.months, args.startDate,
                                        args.endDate, args.folder, args.checksum)
     if args.skip_daily == 0:
-        download_daily_aggTrades(args.type, symbols, num_symbols, dates, args.startDate, args.endDate, args.folder,
+        download_daily_aggTrades(pool, args.type, symbols, num_symbols, dates, args.startDate, args.endDate, args.folder,
                                  args.checksum)
+    pool.work()

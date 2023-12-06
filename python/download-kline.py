@@ -14,9 +14,10 @@ import pandas as pd
 from enums import *
 from utility import download_file, get_all_symbols, get_parser, convert_to_date_object, \
     get_path
+from worker_pool import WorkerPool
 
 
-def download_monthly_klines(trading_type, symbols, num_symbols, intervals, years, months, start_date, end_date, folder,
+def download_monthly_klines(pool, trading_type, symbols, num_symbols, intervals, years, months, start_date, end_date, folder,
                             checksum):
     current = 0
     date_range = None
@@ -45,18 +46,18 @@ def download_monthly_klines(trading_type, symbols, num_symbols, intervals, years
                     if current_date >= start_date and current_date <= end_date:
                         path = get_path(trading_type, "klines", "monthly", symbol, interval)
                         file_name = "{}-{}-{}-{}.zip".format(symbol.upper(), interval, year, '{:02d}'.format(month))
-                        download_file(path, file_name, date_range, folder)
+                        pool.submit(download_file, path, file_name, date_range, folder)
 
                         if checksum == 1:
                             checksum_path = get_path(trading_type, "klines", "monthly", symbol, interval)
                             checksum_file_name = "{}-{}-{}-{}.zip.CHECKSUM".format(symbol.upper(), interval, year,
                                                                                    '{:02d}'.format(month))
-                            download_file(checksum_path, checksum_file_name, date_range, folder)
+                            pool.submit(download_file, checksum_path, checksum_file_name, date_range, folder)
 
         current += 1
 
 
-def download_daily_klines(trading_type, symbols, num_symbols, intervals, dates, start_date, end_date, folder, checksum):
+def download_daily_klines(pool, trading_type, symbols, num_symbols, intervals, dates, start_date, end_date, folder, checksum):
     current = 0
     date_range = None
 
@@ -85,12 +86,12 @@ def download_daily_klines(trading_type, symbols, num_symbols, intervals, dates, 
                 if current_date >= start_date and current_date <= end_date:
                     path = get_path(trading_type, "klines", "daily", symbol, interval)
                     file_name = "{}-{}-{}.zip".format(symbol.upper(), interval, date)
-                    download_file(path, file_name, date_range, folder)
+                    pool.submit(download_file, path, file_name, date_range, folder)
 
                     if checksum == 1:
                         checksum_path = get_path(trading_type, "klines", "daily", symbol, interval)
                         checksum_file_name = "{}-{}-{}.zip.CHECKSUM".format(symbol.upper(), interval, date)
-                        download_file(checksum_path, checksum_file_name, date_range, folder)
+                        pool.submit(download_file, checksum_path, checksum_file_name, date_range, folder)
 
         current += 1
 
@@ -99,8 +100,9 @@ if __name__ == "__main__":
     parser = get_parser('klines')
     args = parser.parse_args(sys.argv[1:])
 
+    pool = WorkerPool(args.workers, 'Download klines')
     if not args.symbols:
-        print("fetching all symbols from exchange")
+        print("Fetching all symbols from exchange")
         symbols = get_all_symbols(args.type)
         num_symbols = len(symbols)
     else:
@@ -115,8 +117,9 @@ if __name__ == "__main__":
         dates = pd.date_range(end=datetime.today(), periods=period.days + 1).to_pydatetime().tolist()
         dates = [date.strftime("%Y-%m-%d") for date in dates]
         if args.skip_monthly == 0:
-            download_monthly_klines(args.type, symbols, num_symbols, args.intervals, args.years, args.months,
+            download_monthly_klines(pool, args.type, symbols, num_symbols, args.intervals, args.years, args.months,
                                     args.startDate, args.endDate, args.folder, args.checksum)
     if args.skip_daily == 0:
-        download_daily_klines(args.type, symbols, num_symbols, args.intervals, dates, args.startDate, args.endDate,
+        download_daily_klines(pool, args.type, symbols, num_symbols, args.intervals, dates, args.startDate, args.endDate,
                               args.folder, args.checksum)
+    pool.work()
