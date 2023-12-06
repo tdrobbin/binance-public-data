@@ -2,12 +2,12 @@ import json
 import os
 import re
 import shutil
-import sys
 import urllib.request
 from argparse import ArgumentParser, RawTextHelpFormatter, ArgumentTypeError
 from pathlib import Path
 
 from enums import *
+from validate_checksum import is_valid_checksum
 
 
 def get_destination_dir(file_url, folder=None):
@@ -42,9 +42,21 @@ def download_file(base_path, file_name, date_range=None, folder=None):
         base_path = os.path.join(base_path, date_range)
     save_path = get_destination_dir(os.path.join(base_path, file_name), folder)
 
-    if os.path.exists(save_path):
-        print("\nFile already exists! {}".format(save_path))
+    if os.path.exists(save_path + '.HTTP404'):
+        print(f'\nFile not found HTTP 404, {save_path}')
         return
+    if os.path.exists(save_path):
+        if save_path.endswith('.CHECKSUM'):
+            checksum_path = save_path
+            check_save_path = save_path.replace('.CHECKSUM', '')
+        else:
+            check_save_path = save_path
+            checksum_path = save_path + '.CHECKSUM'
+        if os.path.exists(checksum_path) and is_valid_checksum(check_save_path, checksum_path):
+            print(f'\nFile already exists, {check_save_path}')
+            return
+        else:
+            print(f'\nMissing or invalid checksum {check_save_path}')
 
     # make the directory
     if not os.path.exists(base_path):
@@ -73,6 +85,8 @@ def download_file(base_path, file_name, date_range=None, folder=None):
 
     except urllib.error.HTTPError:
         print("\nFile not found: {}".format(download_url))
+        with open(save_path + '.HTTP404', 'w') as file:
+            ...
         pass
 
 
