@@ -7,7 +7,7 @@ import os
 # from utility import get_path
 import utility
 from tqdm.auto import tqdm
-from arcticdb import Arctic
+# from arcticdb import Arctic
 from deltalake import DeltaTable, write_deltalake
 import duckdb
 import zipfile
@@ -15,6 +15,8 @@ import pyarrow.csv as pc
 import pyarrow as pa
 from typing import List, Union, Tuple, Optional, Dict, Any, Callable, Iterable
 import re
+
+from .lakeshack import LakeShack
 
 
 def get_download_command():
@@ -108,19 +110,60 @@ def get_all_filenames_in_data_directory(
     )
 
     file_dir = get_store_directory() / Path(example_filepath)
-    print(file_dir)
-    filenames = [p.name for p in file_dir.glob('*.zip') if p.is_file()]
+    # print(file_dir)
+    # return list(file_dir.glob('*.zip')
+    # filenames = [p.name for p in file_dir.glob('*.zip') if p.is_file()]
+    filenames = [p for p in file_dir.glob('*.zip') if p.is_file()]
 
     return filenames
 
 
+def get_data_schemas() -> dict:
+    schemas = """
+    spot:
+        aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|Was the trade the best price match|'
+        trades: '|trade Id| price| qty|quoteQty|time|isBuyerMaker|isBestMatch|'
+        klines: '|Open time|Open|High|Low|Close|Volume|Close time|Quote asset volume|Number of trades|Taker buy base asset volume|Taker buy quote asset volume|Ignore|'
+        trades: '|trade Id|price|qty|quoteQty|time|isBuyerMaker|isBestMatch|'
+    um:
+        aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|'
+        trades: '|trade Id| price| qty|quoteQty|time|isBuyerMaker'
+        klines: '|Open time|Open|High|Low|Close|Volume|Close time|Quote asset volume|Number of trades|Taker buy base asset volume|Taker buy quote asset volume|Ignore|'
+        trades: '|trade Id|price|qty|quoteQty|time|isBuyerMaker|'
+    cm:
+        aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|'
+        trades: '|trade Id| price| qty|quoteQty|time|isBuyerMaker|'
+        klines: '|Open time|Open|High|Low|Close|Volume|Close time|Base asset volume|Number of trades|Taker buy volume|Taker buy base asset volume|Ignore|'
+        trades: '|trade Id|price|qty|baseQty|time|isBuyerMaker|'
+    """
+    schemas = yaml.safe_load(schemas)
+
+    def _to_snake_case(name):
+        # Replace spaces and camelCase with snake_case
+        s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+        s2 = re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1)
+        return s2.replace(' ', '_').lower()
+
+    def _modify_column_names(schemas):
+        for key in schemas:
+            for sub_key in schemas[key]:
+                # Split columns, apply snake_case conversion, and rejoin
+                columns = schemas[key][sub_key].strip('|').split('|')
+                new_columns = [_to_snake_case(col.strip()) for col in columns]
+                schemas[key][sub_key] = '|' + '|'.join(new_columns) + '|'
+
+    _modify_column_names(schemas)
+
+    return schemas
+
+
 def get_secid_data(
-    trading_type='um', 
-    market_data_type='klines', 
-    time_period='monthly', 
-    symbol='BTCUSDT', 
-    interval='1m',
-    time_period_filename=None
+    trading_type: str = 'um', 
+    market_data_type: str = 'klines', 
+    time_period: str = 'monthly', 
+    symbol: str = 'BTCUSDT', 
+    interval: str = '1m',
+    filename_wildcards: str | Iterable[str] = None
 ) -> pd.DataFrame:
     data_path = utility.get_path(
         trading_type=trading_type,
@@ -133,41 +176,64 @@ def get_secid_data(
 
     """
 
+    schemas = get_data_schemas()
+
     store_directory = get_store_directory()
     data_path = store_directory / Path(data_path)
+    table_name = f"{trading_type}.{market_data_type}.{time_period}.{interval}"
 
-    schemas = """
-    spot:
-        aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|Was the trade the best price match|'
-        klines: '|Open time|Open|High|Low|Close|Volume|Close time|Quote asset volume|Number of trades|Taker buy base asset volume|Taker buy quote asset volume|Ignore|'
-        trades: '|trade Id|price|qty|quoteQty|time|isBuyerMaker|isBestMatch|'
-    um:
-        aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|'
-        klines: '|Open time|Open|High|Low|Close|Volume|Close time|Quote asset volume|Number of trades|Taker buy base asset volume|Taker buy quote asset volume|Ignore|'
-        trades: '|trade Id|price|qty|quoteQty|time|isBuyerMaker|'
-    cm:
-        aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|'
-        klines: '|Open time|Open|High|Low|Close|Volume|Close time|Base asset volume|Number of trades|Taker buy volume|Taker buy base asset volume|Ignore|'
-        trades: '|trade Id|price|qty|baseQty|time|isBuyerMaker|'
-    """
-    schemas = yaml.safe_load(schemas)
+    def _get_wildcard(filename):
+        return f"*{filename}" if filename.endswith('.zip') else f"*{filename}.zip"
 
-    fpath_wildard = f"*{'' if time_period_filename is None else time_period_filename}.zip"
+    if filename_wildcards is not None:
+        if isinstance(filename_wildcards, str):
+            filename_wildcards = [filename_wildcards]
+
+        if isinstance(filename_wildcards, Iterable) and all(isinstance(item, str) for item in filename_wildcards):
+            tgt_fpaths = []
+            for period in filename_wildcards:
+                fpath_wildcard = _get_wildcard(period)
+                tgt_fpaths.extend(data_path.glob(fpath_wildcard))
+        else:
+            raise ValueError('time_period_filename must be a string or an iterable of strings')
+    else:
+        tgt_fpaths = list(data_path.glob('*.zip'))
 
     dfs = []
-    for fpath in data_path.glob(fpath_wildard):
-        # dfi = pd.read_csv(fpath, engine='pyarrow', header=0)
+    # for fpath in data_path.glob(fpath_wildard):
+    for fpath in tqdm(tgt_fpaths, disable=True):
+        # # dfi = pd.read_csv(fpath, engine='pyarrow', header=0)
+        # dfi = pd.read_csv(fpath, header=0)
+        # # if value in first column of first row is a string drop the first row. but may be
+        # # a number that was parsed as a string so check if it can be converted to a float
+        # if pd.notnull(pd.to_numeric(dfi.columns[0], errors='coerce')):
+        #     dfi = pd.read_csv(fpath, header=None)
+        
         dfi = pd.read_csv(fpath, header=0)
-        # if value in first column of first row is a string drop the first row. but may be
-        # a number that was parsed as a string so check if it can be converted to a float
-        if pd.notnull(pd.to_numeric(dfi.columns[0], errors='coerce')):
+
+        # Check if the value in the first column of the first row is a string that can't be converted to a float
+        try:
+            float(dfi.iloc[0, 0])
+            is_data = True
+        except ValueError:
+            is_data = False
+        except IndexError:
+            # no data/bad data so skip
+            continue
+
+        # If the first row is a header, read the CSV again without headers
+        if not is_data:
             dfi = pd.read_csv(fpath, header=None)
 
         dfi.columns = [c.lower().replace(' ', '_') for c in schemas[trading_type][market_data_type].split('|') if c != '']
+        # dfi = dfi[[c for c in dfi.columns if c != 'ignore' and c != '' and c is not None and isinstance(c, str)]]
+        dfi = dfi.rename(columns=lambda x: str(x).strip().lower().replace(' ', '_'))
         # get yyyy-mm in the filename and convert to an int in the form of yyyymm and add as 'filename' column
         # e.g. BTCUSDT-trades-2020-02.zip -> 202002
         dfi['month'] = int(re.findall(r'\d{4}-\d{2}', fpath.name)[0].replace('-', ''))
-        dfi['filename'] = str(fpath)
+        dfi['filepath'] = str(fpath)
+        dfi['filename'] = fpath.name
+        dfi['tablename'] = table_name
         
         dfs.append(dfi)
 
@@ -175,7 +241,7 @@ def get_secid_data(
         raise FileNotFoundError(f'no files found in: {data_path}')
     
     df = pd.concat(dfs)
-    df['secid'] = symbol
+    df.insert(0, 'secid', symbol)
 
     for col in df.columns:
         if 'time' in col:
@@ -183,7 +249,6 @@ def get_secid_data(
             df = df.dropna(subset=[col])
     
     for col in df.columns:
-        # print(col)
         if 'time' in col:
             continue
 
@@ -196,7 +261,7 @@ def get_secid_data(
         elif col in ['trade_id', 'month', 'number_of_trades']:
             df[col] = df[col].astype(int)
 
-        elif col in ['filename', 'secid']:
+        elif col in ['filename', 'filepath', 'tablename', 'secid', 'symbol']:
             df[col] = df[col].astype('string')
 
         else:
@@ -206,6 +271,81 @@ def get_secid_data(
     df = df.sort_values(by=some_timestamp_col, ascending=True)
     
     return df
+
+
+def update_lakeshack(
+    path: str | Path,
+    trading_type='um',
+    market_data_type='klines',
+    time_period='monthly',
+    symbols=None,
+    interval='1m'
+):
+    ls = LakeShack(path)
+
+    table_name = f"{trading_type}.{market_data_type}.{time_period}.{interval}"
+
+    if market_data_type == 'klines':
+        if interval == '1m':
+            partition_by = ['secid']
+        else:
+            partition_by = None
+    elif market_data_type in ['trades', 'aggTrades']:
+        partition_by = ['secid', 'month']
+
+    if symbols is None:
+        symbols = get_all_symbols_in_data_direcory(
+            trading_type=trading_type,
+            market_data_type=market_data_type,
+            time_period=time_period
+        )
+
+    for s in tqdm(symbols):
+        if table_name not in ls.tables:
+            df = get_secid_data(
+                trading_type=trading_type,
+                market_data_type=market_data_type,
+                time_period=time_period,
+                symbol=s,
+                interval=interval,
+                filename_wildcards=None
+            )
+        else:
+            fpaths = get_all_filenames_in_data_directory(
+                trading_type=trading_type,
+                market_data_type=market_data_type,
+                time_period=time_period,
+                symbol=s,
+                interval=interval
+            )
+            fetched_fnames = [f.name for f in fpaths]
+            loaded_fnames = ls.sql(f"select distinct filename from '{table_name}' where secid = '{s}'").filename.to_list()
+            new_fnames = [f for f in fetched_fnames if f not in loaded_fnames]
+
+            if len(new_fnames) == 0:
+                continue
+            
+            df = get_secid_data(
+                trading_type=trading_type,
+                market_data_type=market_data_type,
+                time_period=time_period,
+                symbol=s,
+                interval=interval,
+                filename_wildcards=new_fnames
+            )
+
+        # print(f"partition_by: {partition_by}")
+        ls.write_deltalake(
+            table_name=table_name,
+            data=df,
+            mode='append',
+            partition_by=partition_by
+        )
+
+    ls.tables[table_name].optimize.compact()
+    ls._update_tables()
+
+    print(f"Updated {table_name}")
 
 
 def load_secid_data_to_deltalake(
@@ -235,9 +375,12 @@ def load_secid_data_to_deltalake(
             path = f'{trading_type_path}/{time_period}/{market_data_type}/{symbol.upper()}/'
         return path
     """
-    # if market_data_type == 'klines':
-        # klines are partitioned by symbol
-    partition_cols = ['secid']
+    if market_data_type == 'klines':
+        partition_cols = ['secid']
+    elif market_data_type == 'trades':
+        partition_cols = ['secid', 'month']
+    else:
+        raise NotImplementedError()
 
     table_path = get_deltalake_table_path(
         trading_type=trading_type, 
@@ -252,14 +395,17 @@ def load_secid_data_to_deltalake(
             time_period=time_period,
             symbol=symbol,
             interval=interval,
-            time_period_filename=time_period_filename
+            filename_wildcards=time_period_filename
         )
     except FileNotFoundError as e:
         print(e)
         return
 
     pa_table = pa.Table.from_pandas(df, preserve_index=False)
+
     write_deltalake(table_path, pa_table, partition_by=partition_cols, mode='append')
+
+    
 
 
 def make_vwap_duckdb(trades) -> pd.DataFrame:
@@ -336,21 +482,24 @@ def make_vwap_duckdb(trades) -> pd.DataFrame:
 #     store_directory = get_store_directory()
 #     data_path = store_directory / Path(data_path)
 
-#     schemas = """
-#     spot:
-#         aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|Was the trade the best price match|'
-#         klines: '|Open time|Open|High|Low|Close|Volume|Close time|Quote asset volume|Number of trades|Taker buy base asset volume|Taker buy quote asset volume|Ignore|'
-#         trades: '|trade Id|price|qty|quoteQty|time|isBuyerMaker|isBestMatch|'
-#     um:
-#         aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|'
-#         klines: '|Open time|Open|High|Low|Close|Volume|Close time|Quote asset volume|Number of trades|Taker buy base asset volume|Taker buy quote asset volume|Ignore|'
-#         trades: '|trade Id|price|qty|quoteQty|time|isBuyerMaker|'
-#     cm:
-#         aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|'
-#         klines: '|Open time|Open|High|Low|Close|Volume|Close time|Base asset volume|Number of trades|Taker buy volume|Taker buy base asset volume|Ignore|'
-#         trades: '|trade Id|price|qty|baseQty|time|isBuyerMaker|'
-#     """
-#     schemas = yaml.safe_load(schemas)
+    # schemas = """
+    # spot:
+    #     aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|Was the trade the best price match|'
+    #     trades: '|trade Id| price| qty|quoteQty|time|isBuyerMaker|isBestMatch|'
+    #     klines: '|Open time|Open|High|Low|Close|Volume|Close time|Quote asset volume|Number of trades|Taker buy base asset volume|Taker buy quote asset volume|Ignore|'
+    #     trades: '|trade Id|price|qty|quoteQty|time|isBuyerMaker|isBestMatch|'
+    # um:
+    #     aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|'
+    #     trades: '|trade Id| price| qty|quoteQty|time|isBuyerMaker'
+    #     klines: '|Open time|Open|High|Low|Close|Volume|Close time|Quote asset volume|Number of trades|Taker buy base asset volume|Taker buy quote asset volume|Ignore|'
+    #     trades: '|trade Id|price|qty|quoteQty|time|isBuyerMaker|'
+    # cm:
+    #     aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|'
+    #     trades: '|trade Id| price| qty|quoteQty|time|isBuyerMaker|'
+    #     klines: '|Open time|Open|High|Low|Close|Volume|Close time|Base asset volume|Number of trades|Taker buy volume|Taker buy base asset volume|Ignore|'
+    #     trades: '|trade Id|price|qty|baseQty|time|isBuyerMaker|'
+    # """
+    # schemas = yaml.safe_load(schemas)
 
 #     fpath_wildard = f"*{'' if time_period_filename is None else time_period_filename}.zip"
 #     print(fpath_wildard)
@@ -483,3 +632,33 @@ def make_vwap_duckdb(trades) -> pd.DataFrame:
 #         return path
 #     """
 #     raise NotImplementedError
+
+    # if time_period_filename is not None:
+    #     if isinstance(time_period_filename, str):
+    #         fpath_wildcard = f"*{time_period_filename}.zip"
+    #         tgt_fpaths = list(data_path.glob(fpath_wildcard))
+    #     elif isinstance(time_period_filename, Iterable) and all(isinstance(item, str) for item in time_period_filename):
+    #         tgt_fpaths = []
+    #         for period in time_period_filename:
+    #             fpath_wildcard = f"*{period}.zip"
+    #             tgt_fpaths.extend(data_path.glob(fpath_wildcard))
+    #     else:
+    #         raise ValueError('time_period_filename must be a string or an iterable of strings')
+    # else:
+    #     tgt_fpaths = list(data_path.glob('*.zip'))
+
+    #     schemas = """
+    # spot:
+    #     aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|Was the trade the best price match|'
+    #     klines: '|Open time|Open|High|Low|Close|Volume|Close time|Quote asset volume|Number of trades|Taker buy base asset volume|Taker buy quote asset volume|Ignore|'
+    #     trades: '|trade Id|price|qty|quoteQty|time|isBuyerMaker|isBestMatch|'
+    # um:
+    #     aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|'
+    #     klines: '|Open time|Open|High|Low|Close|Volume|Close time|Quote asset volume|Number of trades|Taker buy base asset volume|Taker buy quote asset volume|Ignore|'
+    #     trades: '|trade Id|price|qty|quoteQty|time|isBuyerMaker|'
+    # cm:
+    #     aggtrades: '|Aggregate tradeId|Price|Quantity|First tradeId|Last tradeId|Timestamp|Was the buyer the maker|'
+    #     klines: '|Open time|Open|High|Low|Close|Volume|Close time|Base asset volume|Number of trades|Taker buy volume|Taker buy base asset volume|Ignore|'
+    #     trades: '|trade Id|price|qty|baseQty|time|isBuyerMaker|'
+    # """
+    # schemas = yaml.safe_load(schemas)

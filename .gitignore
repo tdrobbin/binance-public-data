@@ -7,3 +7,11 @@
 */__pycache__/
 python/data/
 data/spot/
+*rsch/__pycache__
+*.pyc
+.tmp/
+*_delta_log/
+*.parquet
+python/data/
+python/data/*
+_metadata.json

@@ -7,6 +7,7 @@ import duckdb
 import pandas as pd
 import numpy as np
 import pyarrow as pa
+import ibis
 from typing import Dict, Any, List, Optional, Union, Iterable, Tuple, Callable
 
 # DeltaShack
@@ -40,7 +41,7 @@ class LakeShack:
             }})
             self.metadata_db.insert({'tables': []})
 
-        self.conn = duckdb.connect(database=':memory:', read_only=False)
+        self.con = duckdb.connect(database=':memory:', read_only=False)
         self.tables = dict()
         # self.tables = {table_name: DeltaTable(table_data['table_path']) for table_name, table_data in self._on_disk_table_info.items()}
         self._update_tables()
@@ -86,10 +87,13 @@ class LakeShack:
         Update the tables property and sql registry with the latest DeltaTable objects.
         """
         for table_name, table_data in self._on_disk_table_info.items():
-            if table_name not in self.tables:
-                self.tables[table_name] = DeltaTable(table_data['table_path'])
+            # if table_name not in self.tables:
+            #     self.tables[table_name] = DeltaTable(table_data['table_path'])
             
-            self.conn.register(table_name, self.tables[table_name].to_pyarrow_dataset())
+            self.tables[table_name] = DeltaTable(table_data['table_path'])
+
+            
+            self.con.register(table_name, self.tables[table_name].to_pyarrow_dataset())
     
     @property
     def total_size(self) -> int:
@@ -138,11 +142,11 @@ class LakeShack:
         use_latest_versions: bool=True
     ) -> Union[pd.DataFrame, pa.Table, np.ndarray, Any]:
         """
-        Execute a SQL query using DuckDB. Convenience method for e.g. `self.conn.sql(query).df()`.
+        Execute a SQL query using DuckDB. Convenience method for e.g. `self.con.sql(query).df()`.
 
         Args:
             query: The SQL query to execute.
-            return_method: The return method, called on the relation `self.conn.sql`. determines the
+            return_method: The return method, called on the relation `self.con.sql`. determines the
                 type of object returned by the query. default is 'df' for DataFrame. options can be
                 viewed here - https://duckdb.org/docs/api/python/overview.html#result-conversion.
                 defaults to pandas dataframe.
@@ -154,7 +158,36 @@ class LakeShack:
         """
         self._update_tables()
         
-        return getattr(self.conn.sql(query), return_method)()
+        return getattr(self.con.sql(query), return_method)()
+    
+    def to_ibis(self, table) -> ibis.Expr:
+        """
+        Return ibis table object for a given table name
+
+        Args:
+            table: The name of the table.
+
+        Returns:
+            The ibis table object.
+        """
+        self._update_tables()
+
+        return ibis.read_delta(self.get_table_path(table))
+
+    def to_duckdb(self, table) -> duckdb.duckdb.DuckDBPyRelation:
+        """
+        Return duckdb table object for a given table name
+
+        Args:
+            table: The name of the table.
+        
+        Returns:
+            The duckdb table object.
+        """
+        self._update_tables()
+
+        return self.con.table(table)
+
 
 
         # try:
@@ -170,28 +203,28 @@ class LakeShack:
         # target_table_names = np.unique(self.conn.get_table_names(query))
         # target_table_current_versions = {table_name: table.version() for table_name, table in self.tables.items()}
 
-        try:
-            if use_latest_versions and (len(target_table_names) > 0 and target_table_names[0] != set()):
-                for table_name in target_table_names:
-                    self.tables[table_name].load_with_datetime(pd.Timestamp.utcnow().isoformat(timespec='seconds'))
-                    self.conn.register(table_name, self.tables[table_name].to_pyarrow_dataset())
+        # try:
+        #     if use_latest_versions and (len(target_table_names) > 0 and target_table_names[0] != set()):
+        #         for table_name in target_table_names:
+        #             self.tables[table_name].load_with_datetime(pd.Timestamp.utcnow().isoformat(timespec='seconds'))
+        #             self.conn.register(table_name, self.tables[table_name].to_pyarrow_dataset())
             
-            self._update_tables()
-            try:
-                return getattr(self.conn.sql(query), return_method)()
-            except duckdb.CatalogException as e:
-                # possible that a new table is not registered in DuckDB yet
-                print(f'Error: {e}')
-                print(f'Updating SQL registry and retrying query...')
-                self._update_tables()
+        #     self._update_tables()
+        #     try:
+        #         return getattr(self.conn.sql(query), return_method)()
+        #     except duckdb.CatalogException as e:
+        #         # possible that a new table is not registered in DuckDB yet
+        #         print(f'Error: {e}')
+        #         print(f'Updating SQL registry and retrying query...')
+        #         self._update_tables()
 
-                return getattr(self.conn.sql(query), return_method)()
+        #         return getattr(self.conn.sql(query), return_method)()
             
-        finally:
-            for table_name, version in target_table_current_versions.items():
-                if (len(target_table_names) > 0 and target_table_names[0] != set()):
-                    self.tables[table_name].load_version(version) 
-                    self.conn.register(table_name, self.tables[table_name].to_pyarrow_dataset())
+        # finally:
+        #     for table_name, version in target_table_current_versions.items():
+        #         if (len(target_table_names) > 0 and target_table_names[0] != set()):
+        #             self.tables[table_name].load_version(version) 
+        #             self.conn.register(table_name, self.tables[table_name].to_pyarrow_dataset())
 
 
     # @property
