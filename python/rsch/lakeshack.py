@@ -1,3 +1,6 @@
+__version__ = '0.0.1'
+
+
 from pathlib import Path
 from deltalake import DeltaTable, write_deltalake
 from tinydb import TinyDB, Query
@@ -10,12 +13,12 @@ import pyarrow as pa
 import ibis
 from typing import Dict, Any, List, Optional, Union, Iterable, Tuple, Callable
 
+
 # DeltaShack
 # DeltaLodge
 # LakeLodge
 # LakeCabin
 class LakeShack:
-    __version__ = '0.0.1'
 
     def __init__(self, path):
         """
