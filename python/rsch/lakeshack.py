@@ -3,6 +3,7 @@ __version__ = '0.0.1'
 
 from pathlib import Path
 from deltalake import DeltaTable, write_deltalake
+import deltalake
 from tinydb import TinyDB, Query
 import datetime
 import deltalake
@@ -39,7 +40,7 @@ class LakeShack:
                 'lakeshack_path': str(self.path),
                 'created': datetime.datetime.now().isoformat(),
                 'metadata_path': str(self.metadata_path),
-                'lakeshack_version': self.__version__,
+                'lakeshack_version': __version__,
                 'deltalake_version': deltalake.__version__,
             }})
             self.metadata_db.insert({'tables': []})
