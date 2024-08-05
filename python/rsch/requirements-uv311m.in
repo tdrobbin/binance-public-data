@@ -10,7 +10,8 @@ fastapi
 holoviews
 html5lib
 hvplot
-ibis-framework[pandas,duckdb,polars]
+ibis-framework[pandas,duckdb,polars,deltalake]==9.1.*
+ibis-ml
 ipykernel
 ipywidgets
 joblib
@@ -33,7 +34,7 @@ pytest-html
 python-box
 python-dotenv
 pyyaml>=6
-duckdb==1.0.1.dev2164
+duckdb
 requests
 ruff
 scalene

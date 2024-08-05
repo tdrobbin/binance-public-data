@@ -94,12 +94,14 @@ decorator==5.1.1
 defusedxml==0.7.1
     # via nbconvert
 deltalake==0.18.2
-    # via -r requirements-uv311m.in
+    # via
+    #   -r requirements-uv311m.in
+    #   ibis-framework
 diskcache==5.6.3
     # via -r requirements-uv311m.in
 dnspython==2.6.1
     # via email-validator
-duckdb==1.0.1.dev2164
+duckdb==1.0.0
     # via
     #   -r requirements-uv311m.in
     #   duckdb-engine
@@ -149,6 +151,10 @@ httpx==0.27.0
 hvplot==0.10.0
     # via -r requirements-uv311m.in
 ibis-framework==9.1.0
+    # via
+    #   -r requirements-uv311m.in
+    #   ibis-ml
+ibis-ml==0.1.2
     # via -r requirements-uv311m.in
 idna==3.7
     # via
@@ -160,8 +166,6 @@ idna==3.7
     #   yarl
 importlib-metadata==8.0.0
     # via dask
-iniconfig==2.0.0
-    # via pytest
 ipykernel==6.29.5
     # via
     #   -r requirements-uv311m.in
@@ -184,7 +188,6 @@ jinja2==3.1.4
     #   jupyterlab
     #   jupyterlab-server
     #   nbconvert
-    #   pytest-html
     #   scalene
 joblib==1.4.2
     # via
@@ -338,7 +341,6 @@ packaging==24.1
     #   matplotlib
     #   nbconvert
     #   plotly
-    #   pytest
     #   statsmodels
     #   xarray
 pandas==2.2.2
@@ -386,8 +388,6 @@ platformdirs==4.2.2
     # via jupyter-core
 plotly==5.22.0
     # via -r requirements-uv311m.in
-pluggy==1.5.0
-    # via pytest
 polars==0.20.31
     # via
     #   -r requirements-uv311m.in
@@ -408,6 +408,8 @@ ptyprocess==0.7.0
     #   terminado
 pure-eval==0.2.2
     # via stack-data
+py==1.11.0
+    # via pytest
 pyarrow==16.1.0
     # via
     #   -r requirements-uv311m.in
@@ -437,17 +439,17 @@ pygments==2.18.0
     #   rich
 pyparsing==3.1.2
     # via matplotlib
-pytest==8.2.2
+pytest==2.9.2
     # via
     #   -r requirements-uv311m.in
     #   pytest-asyncio
     #   pytest-html
     #   pytest-metadata
-pytest-asyncio==0.23.7
+pytest-asyncio==0.4.1
     # via -r requirements-uv311m.in
-pytest-html==4.1.1
+pytest-html==1.15.0
     # via -r requirements-uv311m.in
-pytest-metadata==3.1.1
+pytest-metadata==1.11.0
     # via pytest-html
 python-box==7.2.0
     # via -r requirements-uv311m.in
@@ -494,7 +496,7 @@ referencing==0.35.1
     #   jsonschema
     #   jsonschema-specifications
     #   jupyter-events
-regex==2024.5.15
+regex==2024.7.24
     # via ibis-framework
 requests==2.32.3
     # via

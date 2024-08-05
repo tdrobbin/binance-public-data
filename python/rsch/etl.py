@@ -16,7 +16,7 @@ import pyarrow as pa
 from typing import List, Union, Tuple, Optional, Dict, Any, Callable, Iterable
 import re
 
-# from .lakeshack import LakeShack
+from .lakeshack import LakeShack
 
 
 def get_download_command():
@@ -281,7 +281,7 @@ def update_lakeshack(
     symbols=None,
     interval='1m'
 ):
-    # ls = LakeShack(path)
+    ls = LakeShack(path)
 
     table_name = f"{trading_type}_{market_data_type}_{time_period}_{interval}"
     delta_table_path = Path(path) / table_name
@@ -304,8 +304,8 @@ def update_lakeshack(
         random.shuffle(symbols)
 
     for s in tqdm(symbols):
-        # if table_name not in ls.tables:
-        if not delta_table_path.exists():
+        if table_name not in ls.tables:
+        # if not delta_table_path.exists():
             df = get_secid_data(
                 trading_type=trading_type,
                 market_data_type=market_data_type,
@@ -325,9 +325,9 @@ def update_lakeshack(
             fetched_fnames = [f.name for f in fpaths]
 
 
-            # loaded_fnames = ls.sql(f"select distinct filename from '{table_name}' where secid = '{s}'").filename.to_list()
+            loaded_fnames = ls.sql(f"select distinct filename from '{table_name}' where secid = '{s}'").filename.to_list()
             con = duckdb.connect()
-            loaded_fnames = con.sql(f"""select distinct filename from delta_scan('{delta_table_path}') where secid = '{s}'""").df().filename.to_list()
+            # loaded_fnames = con.sql(f"""select distinct filename from delta_scan('{delta_table_path}') where secid = '{s}'""").df().filename.to_list()
 
             new_fnames = [f for f in fetched_fnames if f not in loaded_fnames]
 
@@ -344,25 +344,25 @@ def update_lakeshack(
             )
 
         # print(f"partition_by: {partition_by}")
-        # ls.write_deltalake(
-        #     table_name=table_name,
-        #     data=df,
-        #     mode='append',
-        #     partition_by=partition_by
-        # )
-
-
-        print(s)
-        data = pa.Table.from_pandas(df, preserve_index=False)
-        write_deltalake(
-            delta_table_path,
-            data=data,
+        ls.write_deltalake(
+            table_name=table_name,
+            data=df,
             mode='append',
-            # partition_by=partition_by
+            partition_by=partition_by
         )
 
-    # ls.tables[table_name].optimize.compact()
-    # ls._update_tables()
+
+        # print(s)
+        # data = pa.Table.from_pandas(df, preserve_index=False)
+        # write_deltalake(
+        #     delta_table_path,
+        #     data=data,
+        #     mode='append',
+        #     # partition_by=partition_by
+        # )
+
+    ls.tables[table_name].optimize.compact()
+    ls._update_tables()
 
     print(f"Updated {table_name}")
 

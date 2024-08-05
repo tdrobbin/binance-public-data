@@ -11,8 +11,40 @@ from typing import List, Union, Tuple, Optional, Dict, Any, Callable
 from dataclasses import dataclass
 
 
+def custom_infer_freq(index: pd.DatetimeIndex) -> str:
+    """
+    infer the frequency of a pandas datetime index. This function is a modified version of the pandas infer_freq function.
+    take the difference between each consecutive value in the index and then take the mode of the differences. in seconds.
+    if the mode is close to 60 +/- 10 seconds, then the frequency is 'T'. if the mode is close to 3600 +/- 600 seconds, then the frequency is 'H'.
+    if the mode is close to 86400 +/- 14400 seconds, then the frequency is 'D'. if the mode is close to 604800 +/- 86400 seconds, then the frequency is 'W'.
+    if the mode is close to 2592000 +/- 432000 seconds, then the frequency is 'M'. if the mode is close to 31536000 +/- 5256000 seconds, then the frequency is 'Y'.
+
+    """
+    if len(index) < 2:
+        return None
+
+    freq = np.nanmean(index.diff().total_seconds())
+
+    if 50 <= freq <= 70:
+        return 'T'
+    elif 3500 <= freq <= 4100:
+        return 'H'
+    elif 85000 <= freq <= 93000:
+        return 'D'
+    elif 590000 <= freq <= 620000:
+        return 'W'
+    elif 2550000 <= freq <= 2630000:
+        return 'M'
+    elif 30900000 <= freq <= 32000000:
+        return 'Y'
+    else:
+        return None
+
+
 def perf_stats(pnl, freq: Optional[str]=None):
     freq = freq or pd.infer_freq(pnl.index)
+
+    freq = freq or custom_infer_freq(pnl.index)
 
     DAYS_PER_YEAR = 365
     PREIODS_PER_DAY = 1440
@@ -23,6 +55,10 @@ def perf_stats(pnl, freq: Optional[str]=None):
         PREIODS_PER_DAY = 24
     elif freq == 'D':
         PREIODS_PER_DAY = 1
+    elif freq == 'W':
+        PREIODS_PER_DAY = 1 / 7
+    elif freq == 'M':
+        PREIODS_PER_DAY = 1 / 30
  
     periods_per_yr = DAYS_PER_YEAR * PREIODS_PER_DAY
 
@@ -211,11 +247,37 @@ class Universe:
 
         self.bar = bar
     
-    def backtest(signal: ibis.Table, tcost_model: float = .0006) -> Backtest:
+    def backtest(self, signal: ibis.Table, tcost_model: float = .0006, fwd: int = 1) -> Backtest:
         sig = signal
+
+        
+            # .group_by('secid')
+            # .order_by('close_time')
+            # .mutate(
+            #     # feat=_.pct_change.sum().over(ibis.trailing_window(preceding=(bwd-1), group_by=_.secid, order_by=_.close_time)),
+            #     wgt_agg=_.wgt.mean().over(ibis.trailing_window(preceding=(fwd-1), group_by=_.secid, order_by=_.close_time)),
+            # )
+            # .group_by('secid')
+            # .order_by('close_time')
+            # .mutate(
+            #     pnl_wgt_agg=_.wgt_agg.lag()
+
 
         pnl = (
             sig
+            # -- add wgt_agg
+            .group_by('secid')
+            .order_by('close_time')
+            .mutate(
+                # feat=_.pct_change.sum().over(ibis.trailing_window(preceding=(bwd-1), group_by=_.secid, order_by=_.close_time)),
+                wgt_agg=(_.wgt if fwd == 1 else _.wgt.mean().over(ibis.trailing_window(preceding=(fwd-1), group_by=_.secid, order_by=_.close_time))),
+            )
+            .group_by('secid')
+            .order_by('close_time')
+            .mutate(
+                pnl_wgt_agg=_.wgt_agg.lag()
+            )
+            # -- end add
             .group_by('secid')
             .order_by('close_time')
             .mutate(
@@ -263,6 +325,8 @@ class Universe:
             bt_perf_stats=bt_df.apply(perf_stats).T,
             bt_dly_perf_stats=bt_dly_df.apply(perf_stats).T
         )
+
+        return bt
 
 
 
