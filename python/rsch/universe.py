@@ -373,6 +373,53 @@ class Universe:
             # event_count = events.count().execute()
             # events = events.mutate(event_id=ibis.range(0, event_count, 1).unnest())
             events = events.mutate(event_id=ibis.row_number())
+
+            ibis.window(group_by='secid', order_by='close_time')
+        
+        bar_w_secid_row_num = self.bar.mutate(secid_row_num=ibis.row_number().over(ibis.window(group_by='secid', order_by='close_time')))
+
+        events_2 = (
+            events
+            .left_join(
+                bar_w_secid_row_num,
+                ['secid', 'close_time']
+            )
+            .select(events.columns + ['secid_row_num'])
+            .rename({'event_secid_row_num': 'secid_row_num'})
+        )
+
+        events_2 = (
+            events_2
+            .left_join(
+                bar_w_secid_row_num,
+                [
+                    'secid',
+                    (events_2['event_secid_row_num'] - bar_w_secid_row_num['secid_row_num'] <= wdw_post),
+                    (bar_w_secid_row_num['secid_row_num'] - events_2['event_secid_row_num'] <= wdw_pre)
+                ]
+            )
+            .mutate(
+                event_offset=_['secid_row_num'] - _['event_secid_row_num']
+            )
+        )
+
+        return events_2
+        
+        # bar_w_row_num = (
+        #     self.bar
+        #     .mutate(row_number=ibis.row_number().over(window)).drop('secid_right', 'close_time_right')
+        # )
+        
+        # events_aug = (
+        #     events
+        #     .inner_join(
+        #         self.bar.mutate(row_number=ibis.row_number().over(ibis.window(group_by='secid', order_by='close_time')))
+        #         ['secid', 'close_time']
+        #     )
+        #     # .select(['secid', 'close_time', 'event_id', 'row_number'])
+        # )
+
+        # return events_aug
         
         # return events
         # Create a sorted version of the return table on the datetime column
@@ -399,7 +446,24 @@ class Universe:
             # .filter(lambda t: t['rank_abs'].between(1, wdw_post + 1))  # Rank 1 is the current row, up to rank 21 (10 before, 10 after)
         )
 
-        return events
+        # a = bar_w_events
+
+        # # Step 1: Assign row numbers partitioned by 'secids' and ordered by 'close_time'
+        # window = ibis.window(group_by='secid', order_by='close_time')
+        # a_with_rownum = a.mutate(row_number=ibis.row_number().over(window)).drop('secid_right', 'close_time_right')
+
+        # events_aug = a_with_rownum.filter(_['event_id'].notnull()).mutate(event_row_number=_['row_number']).drop('row_number')
+        # events_aug
+
+        # events_aug.left_join(
+        #     a_with_rownum,
+        #     [
+        #         'secid',
+        #         ((events_aug['event_row_number'] - a_with_rownum['row_number']).abs() <= 2)
+        #     ]
+        # )
+
+        # return events
 
 
 
