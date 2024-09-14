@@ -10,6 +10,9 @@ from ibis import _
 from typing import List, Union, Tuple, Optional, Dict, Any, Callable
 from dataclasses import dataclass
 
+# import os
+# os.
+
 
 def custom_infer_freq(index: pd.DatetimeIndex) -> str:
     """
@@ -80,6 +83,11 @@ def perf_stats(pnl, freq: Optional[str]=None):
         'pnl_std_err': pnl_std / np.sqrt(len(pnl)),
         'pnl_tstat': pnl_mean / (pnl_std / np.sqrt(len(pnl)))
     })
+
+
+def ensure_ibis(t: Any) -> ibis.Table:
+    if not isinstance(t, ibis.Table):
+        return ibis.memtable(t)
 
 
 @dataclass
@@ -246,8 +254,20 @@ class Universe:
         )
 
         self.bar = bar
+        self.returns = self.bar[['secid', 'close_time', 'return', 'residual']]
     
     def backtest(self, signal: ibis.Table, tcost_model: float = .0006, fwd: int = 1) -> Backtest:
+        """
+        Args:
+            signal: An ibis table with the columns 'secid', 'close_time', 'wgt'. This represents the wgt
+                for the signal generated as of the end of the close_time.
+            tcost_model: The transaction cost model to use. This gets multiploeid by the absolute value of the
+                difference in the wgt from the previous period and then subtracted from the gross pnl.
+            fwd: The forward looking window to use for the signal. If fwd=1, then the wgt will be the same as the signal.
+                If fwd > 1, then the wgt will be the mean of the signal over the previous fwd periods. This is
+                close eough to running fwd distinct signals each generated at each period then allocating
+                1/fwd to each signal and rebalancing each distinct signal each fwd periods.
+        """
         sig = signal
 
         
@@ -327,6 +347,59 @@ class Universe:
         )
 
         return bt
+
+    def event_study(self, events: ibis.Table, wdw_pre: int = 20, wdw_post: int = 20):
+        """
+        Args:
+            events: An ibis table with at minimum the columns 'secid', 'close_time'. Any other columns will be
+            assumed to be features of each event.
+            wdw_pre: The number of periods to look back before the event.
+            wdw_post: The number of periods to look forward after the event.
+        """
+        
+        required_columns = ['secid', 'close_time']
+
+        for c in required_columns:
+            assert c in events.columns
+        
+        assert wdw_pre == wdw_post, 'wdw_pre must equal wdw_post'
+
+        self.events_base = events
+
+        # sort by closet_time and secid
+        events = events.order_by('close_time', 'secid')
+        
+        if 'event_id' not in events.columns:
+            # event_count = events.count().execute()
+            # events = events.mutate(event_id=ibis.range(0, event_count, 1).unnest())
+            events = events.mutate(event_id=ibis.row_number())
+        
+        # return events
+        # Create a sorted version of the return table on the datetime column
+        # sorted_return = self.returns.order_by('close_time')
+
+        # Define a window for 10 rows before and 10 rows after for each row in the events table
+        # window = ibis.window(preceding=wdw_pre, following=wdw_post, order_by='close_time')
+
+        # Create a join between the two tables and apply the window function
+        events = (
+            self
+            .returns
+            .left_join(
+                events,
+                ['close_time', 'secid']
+            )
+            # .mutate(
+            #     rank_abs
+            # )
+            # .mutate(
+            #     rank_abs=ibis.row_number().over(window),
+            #     rank_rel=_['rank_abs'] - (wdw_pre + 1)
+            # )
+            # .filter(lambda t: t['rank_abs'].between(1, wdw_post + 1))  # Rank 1 is the current row, up to rank 21 (10 before, 10 after)
+        )
+
+        return events
 
 
 
