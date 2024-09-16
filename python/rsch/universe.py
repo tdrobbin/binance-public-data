@@ -4,8 +4,7 @@ import ibis
 import statsmodels.api as sm
 from statsmodels.regression.rolling import RollingOLS
 from tqdm.auto import tqdm
-import ibis
-from ibis import _
+from ibis import _, selectors as s
 
 from typing import List, Union, Tuple, Optional, Dict, Any, Callable
 from dataclasses import dataclass
@@ -96,6 +95,13 @@ class Backtest:
     bt_dly_df: ibis.Table
     bt_perf_stats: pd.Series
     bt_dly_perf_stats: pd.Series
+
+
+@dataclass
+class EventStudy:
+    events_info: ibis.Table
+    events: ibis.Table
+    event_study_stats: ibis.Table
 
 
 class Universe:
@@ -270,19 +276,6 @@ class Universe:
         """
         sig = signal
 
-        
-            # .group_by('secid')
-            # .order_by('close_time')
-            # .mutate(
-            #     # feat=_.pct_change.sum().over(ibis.trailing_window(preceding=(bwd-1), group_by=_.secid, order_by=_.close_time)),
-            #     wgt_agg=_.wgt.mean().over(ibis.trailing_window(preceding=(fwd-1), group_by=_.secid, order_by=_.close_time)),
-            # )
-            # .group_by('secid')
-            # .order_by('close_time')
-            # .mutate(
-            #     pnl_wgt_agg=_.wgt_agg.lag()
-
-
         pnl = (
             sig
             # -- add wgt_agg
@@ -357,55 +350,180 @@ class Universe:
             wdw_post: The number of periods to look forward after the event.
         """
         
-        required_columns = ['secid', 'close_time']
+        required_columns = ['secid', 'event_close_time', 'discovery_close_time']
 
         for c in required_columns:
             assert c in events.columns
         
         assert wdw_pre == wdw_post, 'wdw_pre must equal wdw_post'
 
-        self.events_base = events
-
         # sort by closet_time and secid
-        events = events.order_by('close_time', 'secid')
+        events = events.order_by('event_close_time', 'secid')
         
         if 'event_id' not in events.columns:
-            # event_count = events.count().execute()
-            # events = events.mutate(event_id=ibis.range(0, event_count, 1).unnest())
             events = events.mutate(event_id=ibis.row_number())
 
-            ibis.window(group_by='secid', order_by='close_time')
+            # ibis.window(group_by='secid', order_by='event_close_time')
         
+        # add row number for each secid group. i.e. the chronological order of thar bar for tha secid
         bar_w_secid_row_num = self.bar.mutate(secid_row_num=ibis.row_number().over(ibis.window(group_by='secid', order_by='close_time')))
 
-        events_2 = (
+        # add the secid_row_num for the bar that corresponds each event
+        events = (
             events
             .left_join(
                 bar_w_secid_row_num,
-                ['secid', 'close_time']
+                ['secid', ('event_close_time', 'close_time')]
             )
             .select(events.columns + ['secid_row_num'])
             .rename({'event_secid_row_num': 'secid_row_num'})
         )
+        events_info = events.view()
 
-        events_2 = (
-            events_2
+        # add records before and after the event and add an event-relative offset column
+        # also add cum returns and cum residual returns for each event window, and add
+        events = (
+            events
             .left_join(
                 bar_w_secid_row_num,
                 [
                     'secid',
-                    (events_2['event_secid_row_num'] - bar_w_secid_row_num['secid_row_num'] <= wdw_post),
-                    (bar_w_secid_row_num['secid_row_num'] - events_2['event_secid_row_num'] <= wdw_pre)
+                    (events['event_secid_row_num'] - bar_w_secid_row_num['secid_row_num'] <= wdw_post),
+                    (bar_w_secid_row_num['secid_row_num'] - events['event_secid_row_num'] <= wdw_pre)
                 ]
             )
             .mutate(
-                event_offset=_['secid_row_num'] - _['event_secid_row_num']
+                event_offset=_['secid_row_num'] - _['event_secid_row_num'],
+                cum_return=_['return'].sum().over(ibis.cumulative_window(group_by='event_id', order_by='close_time')),
+                cum_residual=_['residual'].sum().over(ibis.cumulative_window(group_by='event_id', order_by='close_time'))
             )
         )
 
-        return events_2
-        
-        # bar_w_row_num = (
+        # now add a centered cum return and cum residual return column which is the cum value minus
+        # the value at the event time (event_offset=0). we do this in a separate expression because
+        # we are essentially doing a self-join. tried calling .view() in the same expression but didtn work
+        # https://ibis-project.org/tutorials/ibis-for-sql-users#self-joins
+        events = (
+            events.view()
+            .left_join(
+                events[['event_id', 'event_offset', 'cum_return', 'cum_residual']].filter(_['event_offset']==0),
+                ['event_id']
+            )
+            .rename({
+                'cum_return_on_event_time': 'cum_return_right',
+                'cum_residual_on_event_time': 'cum_residual_right'
+            })
+            .mutate(
+                centered_cum_return=_['cum_return'] - _['cum_return_on_event_time'],
+                centered_cum_residual=_['cum_residual'] - _['cum_residual_on_event_time']
+            )
+            .drop(s.endswith('_right'))
+            .order_by(['event_id', 'close_time'])
+        )
+
+        event_study_stats = (
+            events
+            .group_by('event_offset')
+            .agg(
+                return_mean=_['return'].mean(),
+                return_count=_['return'].count(),
+                return_std=_['return'].std(),
+                return_std_err=_['return'].std() / _['return'].count()**0.5,
+                return_tstat=_['return'].mean() *  _['return'].count()**0.5 / _['return'].std(),
+                residual_mean=_['residual'].mean(),
+                residual_count=_['residual'].count(),
+                residual_std=_['residual'].std(),
+                residual_std_err=_['residual'].std() / _['residual'].count()**0.5,
+                residual_tstat=_['residual'].mean() * _['residual'].count()**0.5 / _['residual'].std(),
+                centered_cum_return_mean=_['centered_cum_return'].mean(),
+                centered_cum_return_count=_['centered_cum_return'].count(),
+                centered_cum_return_std=_['centered_cum_return'].std(),
+                centered_cum_return_std_err=_['centered_cum_return'].std() / _['centered_cum_return'].count()**0.5,
+                centered_cum_return_tstat=_['centered_cum_return'].mean() * _['centered_cum_return'].count()**0.5 / _['centered_cum_return'].std(),
+                centered_cum_residual_mean=_['centered_cum_residual'].mean(),
+                centered_cum_residual_count=_['centered_cum_residual'].count(),
+                centered_cum_residual_std=_['centered_cum_residual'].std(),
+                centered_cum_residual_std_err=_['centered_cum_residual'].std() / _['centered_cum_residual'].count()**0.5,
+                centered_cum_residual_tstat=_['centered_cum_residual'].mean() * _['centered_cum_residual'].count()**0.5 / _['centered_cum_residual'].std()
+            )
+            .order_by('event_offset')
+        )
+
+        return events_info, events, event_study_stats
+
+            
+            
+            # .group_by('secid')
+            # .order_by('close_time')
+            # .mutate(
+            #     # feat=_.pct_change.sum().over(ibis.trailing_window(preceding=(bwd-1), group_by=_.secid, order_by=_.close_time)),
+            #     wgt_agg=_.wgt.mean().over(ibis.trailing_window(preceding=(fwd-1), group_by=_.secid, order_by=_.close_time)),
+            # )
+            # .group_by('secid')
+            # .order_by('close_time')
+            # .mutate(
+            #     pnl_wgt_agg=_.wgt_agg.lag()
+
+
+
+
+        # events = (
+        #     events
+        #     .group_by('event_id')
+        #     .mutate(
+        #         event_cum_return_center=events.filter(events['event_offset'] == 0)['cum_return'].as_scalar(),
+        #         event_wdw_eid=events.filter(_['event_offset'] == 0)['event_id'].as_scalar(),
+        #         # centered_cum_return=_['cum_return'] - _.filter(_['event_offset'] == 0)['cum_return'].as_scalar(),
+        #         # centered_cum_residual=_['cum_residual'] - _.filter(_['event_offset'] == 0)['cum_residual'].as_scalar()
+        #     )
+        # )
+
+
+# feat
+# .left_join(
+#     unv.select('universe_weight', 'universe_mask', 'secid', 'apply_open_time', 'apply_close_time'), 
+#     [
+#         feat.secid == unv.secid,
+#         feat.open_time.date() == unv.apply_open_time.date(),
+#         feat.close_time.date() == unv.apply_close_time.date()
+#     ]
+# )
+# .fillna(dict(
+#     universe_weight=0,
+#     universe_mask=False
+# ))
+
+
+            # .view()
+        #     .left_join(
+        #         _[['event_id', 'event_offset', 'cum_return', 'cum_residual']].filter(_['event_offset']==0),
+        #         ['event_id']
+        #     )
+        #     .rename({
+        #         'cum_return_on_event_time': 'cum_return_right',
+        #         'cum_residual_on_event_time': 'cum_residual_right'
+        #     })
+        #     .mutate(
+        #         centered_cum_return=_['cum_return'] - _['cum_return_on_event_time'],
+        #         centered_cum_residual=_['cum_residual'] - _['cum_residual_on_event_time']
+        #     )
+        #     .drop(s.endswith('_right'))
+        #     .order_by(['event_id', 'close_time'])
+        # )
+
+            # .order_by(['event_id', 'close_time'])
+            # .group_by('event_id')
+            # .mutate(
+                # event_cum_return_center=_.filter(_['event_offset'] == 0)['cum_return'].as_scalar(),
+                # event_wdw_eid=_.filter(_['event_offset'] == 0)['event_id'].as_scalar(),
+                # centered_cum_return=_['cum_return'] - (_.filter(_['event_offset'] == 0)['cum_return']).as_scalar(),
+                # centered_cum_return=_['cum_return'] - _['event_cum_return_center'],
+                # centered_cum_residual=_['cum_residual'] - _.filter(_['event_offset'] == 0)['cum_residual'].as_scalar()
+            # )
+        # )
+
+
+                # bar_w_row_num = (
         #     self.bar
         #     .mutate(row_number=ibis.row_number().over(window)).drop('secid_right', 'close_time_right')
         # )
@@ -429,13 +547,13 @@ class Universe:
         # window = ibis.window(preceding=wdw_pre, following=wdw_post, order_by='close_time')
 
         # Create a join between the two tables and apply the window function
-        events = (
-            self
-            .returns
-            .left_join(
-                events,
-                ['close_time', 'secid']
-            )
+        # events = (
+        #     self
+        #     .returns
+        #     .left_join(
+        #         events,
+        #         ['close_time', 'secid']
+        #     )
             # .mutate(
             #     rank_abs
             # )
@@ -444,7 +562,7 @@ class Universe:
             #     rank_rel=_['rank_abs'] - (wdw_pre + 1)
             # )
             # .filter(lambda t: t['rank_abs'].between(1, wdw_post + 1))  # Rank 1 is the current row, up to rank 21 (10 before, 10 after)
-        )
+        # )
 
         # a = bar_w_events
 
@@ -464,21 +582,3 @@ class Universe:
         # )
 
         # return events
-
-
-
-
-
-# feat
-# .left_join(
-#     unv.select('universe_weight', 'universe_mask', 'secid', 'apply_open_time', 'apply_close_time'), 
-#     [
-#         feat.secid == unv.secid,
-#         feat.open_time.date() == unv.apply_open_time.date(),
-#         feat.close_time.date() == unv.apply_close_time.date()
-#     ]
-# )
-# .fillna(dict(
-#     universe_weight=0,
-#     universe_mask=False
-# ))
